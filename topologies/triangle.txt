@@ -1,0 +1,9 @@
+# Small triangle — quick sanity check for convergence.
+
+ROUTER X
+ROUTER Y
+ROUTER Z
+
+LINK X Y 1
+LINK Y Z 2
+LINK Z X 4

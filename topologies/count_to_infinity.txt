@@ -1,0 +1,15 @@
+# Classic three-router line for count-to-infinity demos.
+#
+#   A ----1---- B ----1---- C
+#
+# When link B–C fails, without split horizon / poison reverse,
+# A and B keep advertising a route to C through each other and
+# the cost climbs (count to infinity). With poison reverse the
+# loop is broken quickly.
+
+ROUTER A
+ROUTER B
+ROUTER C
+
+LINK A B 1
+LINK B C 1

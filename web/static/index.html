@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Distance Vector Routing — Live Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+
+  <header class="top">
+    <div class="brand">
+      <p class="brand-mark">DV Lab</p>
+      <h1>Distance Vector Routing</h1>
+      <p class="tagline">Live topology · Bellman-Ford updates · link failure recovery</p>
+    </div>
+    <div class="meta" id="meta">
+      <span class="pill" id="conn-pill">Connecting…</span>
+      <span class="pill muted" id="msg-pill">msgs —</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel graph-panel">
+      <div class="panel-head">
+        <h2>Topology</h2>
+        <p id="graph-hint">Click a link to fail or restore it.</p>
+      </div>
+      <div class="graph-wrap" id="graph-wrap">
+        <svg id="graph" viewBox="0 0 640 420" role="img" aria-label="Network topology graph"></svg>
+        <div class="empty" id="graph-empty" hidden>
+          <p>No simulation loaded.</p>
+          <p class="sub">Pick a sample topology to begin.</p>
+        </div>
+        <div class="loading" id="graph-loading">
+          <div class="spinner"></div>
+          <p>Starting routers…</p>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Controls</h2>
+        </div>
+
+        <label class="field">
+          <span>Topology</span>
+          <select id="topo-select">
+            <option value="default">Default 6-router mesh</option>
+            <option value="count_to_infinity">Count-to-infinity (A–B–C)</option>
+            <option value="triangle">Small triangle</option>
+          </select>
+        </label>
+        <button class="btn primary" id="btn-load">Load topology</button>
+
+        <div class="row toggles">
+          <label class="toggle">
+            <input type="checkbox" id="chk-sh" />
+            <span>Split horizon</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="chk-pr" />
+            <span>Poison reverse</span>
+          </label>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn" id="btn-fail-ab" title="Fail A–B">Fail A–B</button>
+          <button class="btn" id="btn-restore-ab" title="Restore A–B">Restore A–B</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="btn-fail-bc" title="Fail B–C">Fail B–C</button>
+          <button class="btn" id="btn-restore-bc" title="Restore B–C">Restore B–C</button>
+        </div>
+
+        <h3 class="subhead">One-click demos</h3>
+        <button class="btn accent" id="btn-demo-fail">Failure recovery (default mesh)</button>
+        <button class="btn danger-outline" id="btn-demo-cti-off">Count-to-∞ without fix</button>
+        <button class="btn ok-outline" id="btn-demo-cti-on">Count-to-∞ with poison reverse</button>
+
+        <p class="hint" id="action-hint"></p>
+        <p class="error" id="action-error" hidden></p>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="panel-head">
+          <h2>Event log</h2>
+        </div>
+        <ul id="event-log" class="log"></ul>
+      </section>
+    </aside>
+
+    <section class="panel tables-panel">
+      <div class="panel-head">
+        <h2>Routing tables</h2>
+        <p>Updated live as advertisements arrive.</p>
+      </div>
+      <div id="tables" class="tables-grid">
+        <p class="muted">Waiting for state…</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Computer Networks · Muhammad Nouman Shakeel · Aarish Muhammad · Ebrahim Imran</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

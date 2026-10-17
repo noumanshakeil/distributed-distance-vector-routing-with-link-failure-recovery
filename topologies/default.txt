@@ -1,0 +1,29 @@
+# Default 6-router mesh — good for failure recovery and path re-convergence.
+# Format:
+#   ROUTER <id>
+#   LINK <a> <b> <cost>
+#
+# Topology sketch:
+#
+#       A ----1---- B ----1---- C
+#       |           |           |
+#       4           2           3
+#       |           |           |
+#       F ----1---- E ----1---- D
+#
+# Alternate path A↔F↔E↔D↔C exists when A–B or B–C fails.
+
+ROUTER A
+ROUTER B
+ROUTER C
+ROUTER D
+ROUTER E
+ROUTER F
+
+LINK A B 1
+LINK B C 1
+LINK C D 3
+LINK D E 1
+LINK E F 1
+LINK F A 4
+LINK B E 2
