@@ -195,7 +195,22 @@ python demos/run_count_to_infinity.py
 
 ---
 
-## 7. Sample logs
+## 7. Screenshots (live visualizer)
+
+Captured from http://127.0.0.1:8765 while running the web lab:
+
+| Scenario | Image |
+| --- | --- |
+| Default 6-router mesh (converged) | [`docs/screenshots/viz-default-mesh.png`](docs/screenshots/viz-default-mesh.png) |
+| Count-to-∞ without fix (B–C down, costs → INF) | [`docs/screenshots/viz-count-to-infinity-without-fix.png`](docs/screenshots/viz-count-to-infinity-without-fix.png) |
+| Count-to-∞ with poison reverse | [`docs/screenshots/viz-count-to-infinity-with-poison.png`](docs/screenshots/viz-count-to-infinity-with-poison.png) |
+| Failure recovery — A–B down, alternate paths | [`docs/screenshots/viz-failure-ab-down.png`](docs/screenshots/viz-failure-ab-down.png) |
+
+![Default mesh](docs/screenshots/viz-default-mesh.png)
+
+![A–B failed on default mesh](docs/screenshots/viz-failure-ab-down.png)
+
+## 8. Sample logs
 
 ### Failure recovery (excerpt)
 
@@ -253,7 +268,7 @@ Result: A correctly marks C unreachable (poison reverse worked).
 
 ---
 
-## 8. Module map (for code walkthrough)
+## 9. Module map (for code walkthrough)
 
 | Module | Responsibility |
 | --- | --- |
@@ -267,7 +282,7 @@ Result: A correctly marks C unreachable (poison reverse worked).
 
 ---
 
-## 9. Viva Q&A
+## 10. Viva Q&A
 
 **Q1. What is a distance vector?**  
 A: A list each router maintains of distances (costs) to all known destinations, plus the next hop for each. It does **not** store the full path — only “how far” and “which neighbour first”.
@@ -301,6 +316,6 @@ A: After failure and convergence, destinations beyond the cut become INF on the 
 
 ---
 
-## 10. Conclusion
+## 11. Conclusion
 
 We built a complete, readable distance-vector simulator with threaded advertisements, runtime link failure/recovery, split horizon / poison reverse, scripted demos, an interactive CLI, and a live browser visualization. The Bellman-Ford update rule is isolated in `Router.update_from_advertisement` so it can be explained line-by-line in a viva.
