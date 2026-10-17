@@ -228,6 +228,10 @@ html, body {
   background: rgba(244, 247, 250, 0.72);
   backdrop-filter: blur(4px);
 }
+/* Author display:grid would otherwise override the HTML hidden attribute. */
+.empty[hidden], .loading[hidden] {
+  display: none !important;
+}
 .spinner {
   width: 28px;
   height: 28px;
