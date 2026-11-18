@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from pathlib import Path
-from typing import Optional
+import socket
+import sys
+import time
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -22,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from dv_routing import Network, load_topology  # noqa: E402
+from dv_routing import Network, NetworkLauncherController, load_topology  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 TOPOLOGIES_DIR = ROOT / "topologies"
@@ -45,23 +47,224 @@ SAMPLE_TOPOLOGIES = {
 app = FastAPI(title="DV Routing Visualizer")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Global simulation handle (single session — fine for a viva demo).
+# Module-level event loop reference captured at startup
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
+
+# Global simulation handles (single session — fine for a viva demo).
 _net: Optional[Network] = None
+_controller: Optional[NetworkLauncherController] = None
 _net_lock = asyncio.Lock()
 _ws_clients: set[WebSocket] = set()
 _current_topo_key = "default"
 
 
+def set_main_loop(loop: Optional[asyncio.AbstractEventLoop]) -> None:
+    """Explicitly sets main event loop (useful in test setups)."""
+    global _main_loop
+    _main_loop = loop
+
+
 def get_net() -> Network:
+    """Returns active in-memory network instance or raises RuntimeError."""
     if _net is None:
         raise RuntimeError("Simulation not started")
     return _net
 
 
+def set_controller(controller: Optional[NetworkLauncherController]) -> None:
+    """Sets an active UDP network controller."""
+    global _controller
+    _controller = controller
+
+
+def get_controller() -> Optional[NetworkLauncherController]:
+    """Returns active UDP network controller if set."""
+    return _controller
+
+
+def query_router_tables_udp(
+    router_ports: Dict[str, int],
+    host: str = "127.0.0.1",
+    timeout: float = 0.4,
+) -> Tuple[Dict[str, dict], Dict[str, list[str]]]:
+    """Queries router processes via UDP QUERY_TABLE."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if hasattr(socket, "SIO_UDP_CONNRESET"):
+        try:
+            sock.ioctl(socket.SIO_UDP_CONNRESET, False)
+        except Exception:
+            pass
+    req = json.dumps({"type": "CONTROL", "action": "QUERY_TABLE"}).encode("utf-8")
+    for port in router_ports.values():
+        try:
+            sock.sendto(req, (host, port))
+        except Exception:
+            pass
+
+    tables: Dict[str, dict] = {}
+    dropped_links_map: Dict[str, list[str]] = {}
+    deadline = time.time() + timeout
+    while len(tables) < len(router_ports) and time.time() < deadline:
+        rem = max(0.01, deadline - time.time())
+        sock.settimeout(rem)
+        try:
+            data, _ = sock.recvfrom(65535)
+        except (socket.timeout, TimeoutError):
+            break
+        except (ConnectionResetError, ConnectionRefusedError, OSError):
+            break
+        try:
+            msg = json.loads(data.decode("utf-8"))
+        except Exception:
+            continue
+        if msg.get("type") == "TABLE_RESPONSE":
+            r_name = msg.get("router")
+            if r_name:
+                tables[r_name] = msg.get("table", {})
+                dropped_links_map[r_name] = msg.get("dropped_links", [])
+    sock.close()
+    return tables, dropped_links_map
+
+
+def discover_external_udp_routers(
+    host: str = "127.0.0.1",
+    base_port: int = 10001,
+    count: int = 6,
+    timeout: float = 0.2,
+) -> Tuple[Dict[str, dict], Dict[str, list[str]]]:
+    """Probes default UDP ports (10001..10006) for active router processes."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if hasattr(socket, "SIO_UDP_CONNRESET"):
+        try:
+            sock.ioctl(socket.SIO_UDP_CONNRESET, False)
+        except Exception:
+            pass
+    req = json.dumps({"type": "CONTROL", "action": "QUERY_TABLE"}).encode("utf-8")
+    for p in range(base_port, base_port + count):
+        try:
+            sock.sendto(req, (host, p))
+        except Exception:
+            pass
+    tables: Dict[str, dict] = {}
+    dropped_links_map: Dict[str, list[str]] = {}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        rem = max(0.01, deadline - time.time())
+        sock.settimeout(rem)
+        try:
+            data, _ = sock.recvfrom(65535)
+        except (socket.timeout, TimeoutError):
+            break
+        except (ConnectionResetError, ConnectionRefusedError, OSError):
+            break
+        try:
+            msg = json.loads(data.decode("utf-8"))
+        except Exception:
+            continue
+        if msg.get("type") == "TABLE_RESPONSE":
+            r_name = msg.get("router")
+            if r_name:
+                tables[r_name] = msg.get("table", {})
+                dropped_links_map[r_name] = msg.get("dropped_links", [])
+    sock.close()
+    return tables, dropped_links_map
+
+
+def assemble_udp_state(
+    tables: Dict[str, dict],
+    dropped_links_map: Dict[str, list[str]],
+    topology_links: Optional[Dict[Tuple[str, str], int]] = None,
+    split_horizon: bool = False,
+    poison_reverse: bool = False,
+    running: bool = True,
+) -> dict:
+    """Assembles a UI-compatible state snapshot from UDP router responses."""
+    links = []
+    down_links = []
+    if topology_links:
+        for edge, cost in topology_links.items():
+            a, b = sorted(edge)
+            is_down = (b in dropped_links_map.get(a, [])) or (a in dropped_links_map.get(b, []))
+            links.append({"a": a, "b": b, "cost": cost, "up": not is_down})
+            if is_down:
+                down_links.append(f"{a}-{b}")
+    else:
+        seen_edges = set()
+        for r_name, tbl in tables.items():
+            for dest, row in tbl.items():
+                if dest != r_name:
+                    edge = tuple(sorted([r_name, dest]))
+                    if edge not in seen_edges:
+                        seen_edges.add(edge)
+                        a, b = edge
+                        is_down = (b in dropped_links_map.get(a, [])) or (a in dropped_links_map.get(b, []))
+                        cost = row.get("cost", 1)
+                        if isinstance(cost, str) or cost >= 16:
+                            cost = 1
+                        links.append({"a": a, "b": b, "cost": cost, "up": not is_down})
+                        if is_down:
+                            down_links.append(f"{a}-{b}")
+
+    return {
+        "running": running,
+        "split_horizon": split_horizon,
+        "poison_reverse": poison_reverse,
+        "message_count": 0,
+        "routers": tables,
+        "links": links,
+        "down_links": down_links,
+        "events": [],
+    }
+
+
+def get_state() -> dict:
+    """Returns the current state snapshot in either simulation or UDP controller mode."""
+    if _controller is not None and _controller.is_running():
+        tables, dropped = query_router_tables_udp(
+            _controller.router_ports,
+            host=_controller.host,
+            timeout=0.4,
+        )
+        return assemble_udp_state(
+            tables=tables,
+            dropped_links_map=dropped,
+            topology_links=_controller.topology.links if hasattr(_controller, "topology") else None,
+            split_horizon=getattr(_controller, "split_horizon", False),
+            poison_reverse=getattr(_controller, "poison_reverse", False),
+            running=True,
+        )
+    if _net is not None and _net.is_running():
+        return _net.snapshot()
+
+    # Check external UDP router processes on default ports
+    tables, dropped = discover_external_udp_routers()
+    if tables:
+        topo_links = None
+        if _current_topo_key in SAMPLE_TOPOLOGIES:
+            try:
+                topo = load_topology(SAMPLE_TOPOLOGIES[_current_topo_key]["path"])
+                topo_links = topo.links
+            except Exception:
+                pass
+        return assemble_udp_state(
+            tables=tables,
+            dropped_links_map=dropped,
+            topology_links=topo_links,
+            running=True,
+        )
+
+    if _net is not None:
+        return _net.snapshot()
+
+    raise RuntimeError("Simulation not started")
+
+
 async def broadcast_state() -> None:
-    if _net is None:
+    try:
+        state = get_state()
+    except RuntimeError:
         return
-    payload = json.dumps({"type": "state", "data": _net.snapshot()})
+    payload = json.dumps({"type": "state", "data": state})
     dead: list[WebSocket] = []
     for ws in list(_ws_clients):
         try:
@@ -73,13 +276,19 @@ async def broadcast_state() -> None:
 
 
 def _on_sim_event(_ev) -> None:
-    """Schedule a broadcast from the sim thread onto the asyncio loop."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(broadcast_state(), loop)
-    except RuntimeError:
-        pass
+    """Schedule a broadcast from the sim thread onto the captured asyncio loop."""
+    global _main_loop
+    if _main_loop is not None and _main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(broadcast_state(), _main_loop)
+
+
+async def stop_network() -> None:
+    """Safely stop in-memory simulation network without blocking the event loop."""
+    global _net
+    if _net is not None:
+        net = _net
+        _net = None
+        await asyncio.to_thread(net.stop)
 
 
 async def start_network(topo_key: str = "default", custom_path: Optional[str] = None) -> dict:
@@ -87,8 +296,7 @@ async def start_network(topo_key: str = "default", custom_path: Optional[str] = 
 
     async with _net_lock:
         if _net is not None:
-            _net.stop()
-            _net = None
+            await stop_network()
 
         if custom_path:
             path = Path(custom_path)
@@ -119,15 +327,19 @@ async def start_network(topo_key: str = "default", custom_path: Optional[str] = 
 
 @app.on_event("startup")
 async def _startup() -> None:
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     await start_network("default")
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    global _net
-    if _net is not None:
-        _net.stop()
-        _net = None
+    await stop_network()
+    global _controller
+    if _controller is not None:
+        controller = _controller
+        _controller = None
+        await asyncio.to_thread(controller.stop)
 
 
 @app.get("/")
@@ -138,7 +350,7 @@ async def index() -> FileResponse:
 @app.get("/api/state")
 async def api_state() -> JSONResponse:
     try:
-        return JSONResponse(get_net().snapshot())
+        return JSONResponse(get_state())
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
 
@@ -171,7 +383,12 @@ async def api_fail(body: dict) -> JSONResponse:
     a, b = body.get("a"), body.get("b")
     if not a or not b:
         return JSONResponse({"error": "Need a and b"}, status_code=400)
-    get_net().fail_link(a, b)
+    if _controller is not None and _controller.is_running():
+        _controller.fail_link(a, b)
+    elif _net is not None:
+        _net.fail_link(a, b)
+    else:
+        return JSONResponse({"error": "No simulation or controller running"}, status_code=503)
     await broadcast_state()
     return JSONResponse({"ok": True})
 
@@ -181,20 +398,32 @@ async def api_restore(body: dict) -> JSONResponse:
     a, b = body.get("a"), body.get("b")
     if not a or not b:
         return JSONResponse({"error": "Need a and b"}, status_code=400)
-    get_net().restore_link(a, b)
+    if _controller is not None and _controller.is_running():
+        _controller.restore_link(a, b)
+    elif _net is not None:
+        _net.restore_link(a, b)
+    else:
+        return JSONResponse({"error": "No simulation or controller running"}, status_code=503)
     await broadcast_state()
     return JSONResponse({"ok": True})
 
 
 @app.post("/api/config")
 async def api_config(body: dict) -> JSONResponse:
-    net = get_net()
-    if "split_horizon" in body:
-        net.set_split_horizon(bool(body["split_horizon"]))
-    if "poison_reverse" in body:
-        net.set_poison_reverse(bool(body["poison_reverse"]))
+    if _controller is not None and _controller.is_running():
+        if "split_horizon" in body:
+            _controller.split_horizon = bool(body["split_horizon"])
+        if "poison_reverse" in body:
+            _controller.poison_reverse = bool(body["poison_reverse"])
+    elif _net is not None:
+        if "split_horizon" in body:
+            _net.set_split_horizon(bool(body["split_horizon"]))
+        if "poison_reverse" in body:
+            _net.set_poison_reverse(bool(body["poison_reverse"]))
+    else:
+        return JSONResponse({"error": "No simulation running"}, status_code=503)
     await broadcast_state()
-    return JSONResponse({"ok": True, "state": net.snapshot()})
+    return JSONResponse({"ok": True, "state": get_state()})
 
 
 @app.post("/api/demo/count-to-infinity")
@@ -252,8 +481,11 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     _ws_clients.add(ws)
     try:
-        if _net is not None:
-            await ws.send_text(json.dumps({"type": "state", "data": _net.snapshot()}))
+        try:
+            state = get_state()
+            await ws.send_text(json.dumps({"type": "state", "data": state}))
+        except RuntimeError:
+            pass
         while True:
             # Client may send ping / commands; we also push on events.
             raw = await ws.receive_text()
@@ -264,10 +496,11 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             if msg.get("type") == "ping":
                 await ws.send_text(json.dumps({"type": "pong"}))
             elif msg.get("type") == "refresh":
-                if _net is not None:
-                    await ws.send_text(
-                        json.dumps({"type": "state", "data": _net.snapshot()})
-                    )
+                try:
+                    state = get_state()
+                    await ws.send_text(json.dumps({"type": "state", "data": state}))
+                except RuntimeError:
+                    pass
     except WebSocketDisconnect:
         pass
     finally:
@@ -278,7 +511,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 async def _ticker() -> None:
     while True:
         await asyncio.sleep(0.7)
-        if _net is not None and _ws_clients:
+        if _ws_clients:
             await broadcast_state()
 
 

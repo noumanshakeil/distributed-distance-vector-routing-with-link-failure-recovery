@@ -1,0 +1,4 @@
+trial,interval_sec,convergence_time_sec,message_count
+1,0.03,0.3051,139
+1,0.06,0.304,95
+1,0.1,0.3061,97

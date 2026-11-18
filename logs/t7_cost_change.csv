@@ -1,0 +1,2 @@
+trial,old_cost,new_cost,old_route,new_route,adaptation_time_sec
+1,2,6,A->B->C,A->B->C,0.3014

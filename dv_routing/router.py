@@ -14,6 +14,7 @@ can bootstrap without waiting for advertisements.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -28,6 +29,7 @@ class RouteEntry:
 
     next_hop: Optional[str]
     cost: int
+    last_updated: float = 0.0
 
     def is_reachable(self) -> bool:
         return self.cost < INF and self.next_hop is not None
@@ -49,8 +51,9 @@ class Router:
     def __init__(self, name: str) -> None:
         self.name = name
         self.neighbors: Dict[str, int] = {}
+        now = time.time()
         self.table: Dict[str, RouteEntry] = {
-            name: RouteEntry(next_hop=name, cost=0),
+            name: RouteEntry(next_hop=name, cost=0, last_updated=now),
         }
         self._lock = threading.RLock()
 
@@ -60,12 +63,15 @@ class Router:
 
     def set_neighbor(self, neighbor: str, cost: int) -> None:
         """Add or update a direct neighbour link (link is up)."""
+        now = time.time()
         with self._lock:
             self.neighbors[neighbor] = cost
             # Seed / refresh the one-hop route.
             current = self.table.get(neighbor)
             if current is None or cost < current.cost or current.next_hop == neighbor:
-                self.table[neighbor] = RouteEntry(next_hop=neighbor, cost=cost)
+                self.table[neighbor] = RouteEntry(
+                    next_hop=neighbor, cost=cost, last_updated=now
+                )
 
     def remove_neighbor(self, neighbor: str) -> None:
         """Neighbour link went down — drop direct adjacency."""
@@ -78,18 +84,24 @@ class Router:
         Returns True if any row changed (caller should trigger re-advertise).
         """
         changed = False
+        now = time.time()
         with self._lock:
             for dest, entry in list(self.table.items()):
                 if dest == self.name:
                     continue
                 if entry.next_hop == dead_neighbor:
-                    self.table[dest] = RouteEntry(next_hop=None, cost=INF)
-                    changed = True
+                    if entry.cost != INF:
+                        self.table[dest] = RouteEntry(
+                            next_hop=dead_neighbor, cost=INF, last_updated=now
+                        )
+                        changed = True
             # Also clear a direct route to the neighbour itself.
             if dead_neighbor in self.table:
                 entry = self.table[dead_neighbor]
-                if entry.next_hop == dead_neighbor or entry.cost >= INF:
-                    self.table[dead_neighbor] = RouteEntry(next_hop=None, cost=INF)
+                if entry.next_hop == dead_neighbor and entry.cost != INF:
+                    self.table[dead_neighbor] = RouteEntry(
+                        next_hop=dead_neighbor, cost=INF, last_updated=now
+                    )
                     changed = True
         return changed
 
@@ -124,6 +136,7 @@ class Router:
 
             link_cost = self.neighbors[from_neighbor]
             changed = False
+            now = time.time()
 
             for dest, adv_cost in advertisement.items():
                 if dest == self.name:
@@ -143,7 +156,7 @@ class Router:
                     # New destination learned via this neighbour.
                     if candidate < INF:
                         self.table[dest] = RouteEntry(
-                            next_hop=from_neighbor, cost=candidate
+                            next_hop=from_neighbor, cost=candidate, last_updated=now
                         )
                         changed = True
                     continue
@@ -151,14 +164,24 @@ class Router:
                 # Better path → take it.
                 if candidate < current.cost:
                     self.table[dest] = RouteEntry(
-                        next_hop=from_neighbor, cost=candidate
+                        next_hop=from_neighbor, cost=candidate, last_updated=now
                     )
                     changed = True
                 # Same next-hop refreshed its cost (could go up after a failure).
                 elif current.next_hop == from_neighbor and candidate != current.cost:
-                    new_hop = from_neighbor if candidate < INF else None
-                    self.table[dest] = RouteEntry(next_hop=new_hop, cost=candidate)
+                    if candidate >= INF and dest in self.neighbors:
+                        fallback_cost = self.neighbors[dest]
+                        self.table[dest] = RouteEntry(
+                            next_hop=dest, cost=fallback_cost, last_updated=now
+                        )
+                    else:
+                        new_hop = from_neighbor if candidate < INF else None
+                        self.table[dest] = RouteEntry(
+                            next_hop=new_hop, cost=candidate, last_updated=now
+                        )
                     changed = True
+                elif current.next_hop == from_neighbor and candidate == current.cost:
+                    current.last_updated = now
                 # Equal cost from another neighbour: keep existing (stable).
 
             return changed

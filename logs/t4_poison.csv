@@ -1,0 +1,4 @@
+trial,step,time_offset_sec,cost_a_to_c,cost_b_to_c,loop_stopped
+1,0,0.0,2,1,False
+1,1,0.0,2,INF,False
+1,2,0.021,INF,INF,True

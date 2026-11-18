@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Count-to-infinity demo: without fix, then with poison reverse.
+"""Count-to-infinity demo: without fix, then with poison reverse or split horizon.
 
 Uses the classic A—B—C line. After B–C fails:
   * Without SH/PR, A and B inflate the cost toward C (count to infinity).
   * With poison reverse, B advertises C=INF back to A and the loop dies.
+  * With split horizon, B suppresses route C back to A and the loop dies.
 """
 
 from __future__ import annotations
@@ -37,9 +38,21 @@ def watch_cost_to_c(net: Network, duration: float, label: str) -> None:
     print(net.print_all_tables())
 
 
-def run_scenario(*, poison: bool, watch: float) -> None:
+def run_scenario(*, mitigation: str = "none", watch: float = 6.0) -> None:
     topo = load_topology(ROOT / "topologies" / "count_to_infinity.txt")
-    title = "WITH poison reverse" if poison else "WITHOUT split horizon / poison reverse"
+    if mitigation == "poison-reverse":
+        title = "WITH poison reverse"
+        sh = True
+        pr = True
+    elif mitigation == "split-horizon":
+        title = "WITH split horizon"
+        sh = True
+        pr = False
+    else:
+        title = "WITHOUT split horizon / poison reverse"
+        sh = False
+        pr = False
+
     print("\n" + "=" * 60)
     print(f"  Scenario: {title}")
     print("=" * 60)
@@ -48,8 +61,8 @@ def run_scenario(*, poison: bool, watch: float) -> None:
     net = Network(
         topo,
         advertise_interval=0.3,
-        split_horizon=poison,
-        poison_reverse=poison,
+        split_horizon=sh,
+        poison_reverse=pr,
         log=lambda m: None,  # quieter; we print costs ourselves
     )
     net.start()
@@ -58,8 +71,8 @@ def run_scenario(*, poison: bool, watch: float) -> None:
     print(net.print_all_tables())
 
     print("\n>>> Failing link B-C")
-    if poison:
-        # Good news travels with triggered updates + poison reverse.
+    if pr or sh:
+        # Good news travels with triggered updates + loop prevention.
         net.fail_link("B", "C", triggered_advertise=True)
     else:
         # Classic count-to-infinity race: do not flood INF immediately.
@@ -71,9 +84,14 @@ def run_scenario(*, poison: bool, watch: float) -> None:
     watch_cost_to_c(net, watch, title)
 
     a_final = net.route_cost("A", "C")
-    if poison:
+    if pr:
         if a_final >= INF:
             print("\nResult: A correctly marks C unreachable (poison reverse worked).")
+        else:
+            print(f"\nResult: unexpected — A still has cost {a_final} to C.")
+    elif sh:
+        if a_final >= INF:
+            print("\nResult: A correctly marks C unreachable (split horizon worked).")
         else:
             print(f"\nResult: unexpected — A still has cost {a_final} to C.")
     else:
@@ -94,17 +112,27 @@ def main() -> None:
         help="Seconds to watch costs after failure",
     )
     parser.add_argument(
+        "--mitigation",
+        choices=("none", "poison-reverse", "split-horizon"),
+        default=None,
+        help="Loop mitigation strategy (Section 8 Command 6)",
+    )
+    parser.add_argument(
         "--only",
         choices=("without", "with", "both"),
-        default="both",
-        help="Which scenario(s) to run",
+        default=None,
+        help="Which scenario(s) to run (backward compatibility)",
     )
     args = parser.parse_args()
 
-    if args.only in ("without", "both"):
-        run_scenario(poison=False, watch=args.watch)
-    if args.only in ("with", "both"):
-        run_scenario(poison=True, watch=min(args.watch, 4.0))
+    if args.mitigation is not None:
+        run_scenario(mitigation=args.mitigation, watch=args.watch)
+    else:
+        only = args.only or "both"
+        if only in ("without", "both"):
+            run_scenario(mitigation="none", watch=args.watch)
+        if only in ("with", "both"):
+            run_scenario(mitigation="poison-reverse", watch=min(args.watch, 4.0))
 
     print("\nDemo complete.")
 

@@ -1,0 +1,4 @@
+trial,timestamp,event,route_a_to_b_cost,route_a_to_b_next_hop,reroute_time_sec
+1,2026-11-18T08:42:52Z,baseline,1,B,0.0
+1,2026-11-18T08:42:52Z,link_fail,7,F,0.3022
+1,2026-11-18T08:42:53Z,link_restore,1,B,0.3014

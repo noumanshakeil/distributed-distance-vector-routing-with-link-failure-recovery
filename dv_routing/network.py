@@ -254,6 +254,21 @@ class Network:
         self._advertise_from(a)
         self._advertise_from(b)
 
+    def set_link_cost(self, a: str, b: str, cost: int) -> None:
+        """Update runtime cost of link a-b and advertise updates."""
+        edge = frozenset((a, b))
+        with self._lock:
+            if edge not in self.live_links:
+                self.log("warn", f"Link {a}-{b} is not live.")
+                return
+            self.live_links[edge] = cost
+            self.routers[a].set_neighbor(b, cost)
+            self.routers[b].set_neighbor(a, cost)
+
+        self.log("cost", f"Link {a}-{b} COST set to {cost}")
+        self._advertise_from(a)
+        self._advertise_from(b)
+
     def set_split_horizon(self, enabled: bool) -> None:
         with self._lock:
             self.split_horizon = enabled

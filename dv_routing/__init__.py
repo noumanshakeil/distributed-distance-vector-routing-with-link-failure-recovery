@@ -14,6 +14,8 @@ network
 from .topology import Topology, load_topology
 from .router import Router, RouteEntry, INF
 from .network import Network
+from .router_process import RouterProcess
+from .launcher import NetworkLauncherController, launch_network
 
 __all__ = [
     "Topology",
@@ -22,4 +24,7 @@ __all__ = [
     "RouteEntry",
     "INF",
     "Network",
+    "RouterProcess",
+    "NetworkLauncherController",
+    "launch_network",
 ]
